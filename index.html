@@ -97,6 +97,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
 .empty-state svg { width: 80px; height: 80px; margin-bottom: 16px; opacity: 0.4; }
 .empty-state p { font-size: 16px; }
 
+.wrong-book-btn { position: relative; }
+.wrong-book-btn .badge { position: absolute; top: -6px; right: -6px; background: #ea4335; color: #fff; font-size: 11px; min-width: 18px; height: 18px; border-radius: 9px; display: flex; align-items: center; justify-content: center; padding: 0 4px; font-weight: 600; }
+.wrong-book-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
+.wrong-book-header h2 { font-size: 18px; color: #333; }
+.wrong-book-header .back-btn { padding: 6px 16px; background: #f0f0f0; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; color: #555; transition: all 0.2s; }
+.wrong-book-header .back-btn:hover { background: #e0e0e0; }
+.wrong-book-header .clear-btn { padding: 6px 16px; background: #fce8e6; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; color: #c5221f; transition: all 0.2s; }
+.wrong-book-header .clear-btn:hover { background: #f5c6c2; }
+.wrong-book-empty { text-align: center; padding: 80px 20px; color: #aaa; }
+.wrong-book-empty .icon { font-size: 48px; margin-bottom: 12px; }
+.wrong-book-empty p { font-size: 15px; }
+
 @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 
 @media (max-width: 640px) {
@@ -118,6 +130,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"
 <div class="header">
   <h1>配电网调控人员考试题库</h1>
   <p>共 <span id="totalCount">0</span> 道题 · 支持单选、多选、判断、简答</p>
+  <button class="wrong-book-btn mode-btn" style="margin-top:10px;background:rgba(255,255,255,0.2);color:#fff;border-color:rgba(255,255,255,0.3)" onclick="openWrongBook()">📝 错题本 <span class="badge" id="wrongBadge" style="display:none">0</span></button>
 </div>
 
 <div class="container">
@@ -168,12 +181,16 @@ let state = {
   answers: {},
   results: {},
   stats: { correct: 0, wrong: 0, total: 0 },
-  singleMode: { currentIndex: 0, answered: false }
+  singleMode: { currentIndex: 0, answered: false },
+  wrongBook: [],  // 错题本：存储题目在DATA中的索引
+  currentView: 'exam'  // 'exam' 或 'wrongBook'
 };
 
 function init() {
+  loadWrongBook();
   populateCategories();
   applyFilters();
+  updateWrongBadge();
   document.getElementById('categoryFilter').addEventListener('change', () => { state.page = 1; applyFilters(); });
   document.getElementById('typeFilter').addEventListener('change', () => { state.page = 1; applyFilters(); });
   document.getElementById('pageSize').addEventListener('change', (e) => {
@@ -362,7 +379,25 @@ function submitAnswer(qid) {
 
   state.results[qid] = { userAnswers, correctAnswers, isCorrect };
   state.stats.total++;
-  if (isCorrect) state.stats.correct++; else state.stats.wrong++;
+  if (isCorrect) {
+    state.stats.correct++;
+    // 答对时从错题本移除
+    const globalIdx = parseInt(qid.split('_')[1]);
+    if (state.wrongBook.includes(globalIdx)) {
+      state.wrongBook = state.wrongBook.filter(i => i !== globalIdx);
+      saveWrongBook();
+      updateWrongBadge();
+    }
+  } else {
+    state.stats.wrong++;
+    // 答错时自动收录到错题本
+    const globalIdx = parseInt(qid.split('_')[1]);
+    if (!state.wrongBook.includes(globalIdx)) {
+      state.wrongBook.push(globalIdx);
+      saveWrongBook();
+      updateWrongBadge();
+    }
+  }
   updateStats();
   
   // 单题模式下标记为已答
@@ -437,6 +472,154 @@ function escapeHtml(str) {
   if (!str) return '';
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+// ========== 错题本功能 ==========
+
+function loadWrongBook() {
+  try {
+    const saved = localStorage.getItem('wrongBook');
+    if (saved) state.wrongBook = JSON.parse(saved);
+  } catch(e) {}
+}
+
+function saveWrongBook() {
+  try {
+    localStorage.setItem('wrongBook', JSON.stringify(state.wrongBook));
+  } catch(e) {}
+}
+
+function updateWrongBadge() {
+  const badge = document.getElementById('wrongBadge');
+  if (state.wrongBook.length > 0) {
+    badge.style.display = 'flex';
+    badge.textContent = state.wrongBook.length;
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function openWrongBook() {
+  state.currentView = 'wrongBook';
+  state.page = 1;
+  state.results = {};
+  state.answers = {};
+  state.stats = { correct: 0, wrong: 0, total: 0 };
+  updateStats();
+  renderWrongBook();
+}
+
+function closeWrongBook() {
+  state.currentView = 'exam';
+  state.page = 1;
+  state.results = {};
+  state.answers = {};
+  state.stats = { correct: 0, wrong: 0, total: 0 };
+  updateStats();
+  applyFilters();
+}
+
+function renderWrongBook() {
+  const list = document.getElementById('questionList');
+  const wrongQuestions = state.wrongBook.map(idx => DATA[idx]).filter(Boolean);
+
+  let html = '<div class="wrong-book-header">';
+  html += '<h2>📝 错题本（共 ' + wrongQuestions.length + ' 题）</h2>';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+  html += '<button class="clear-btn" onclick="clearWrongBook()">' + (state._clearConfirming ? '⚠️ 再次点击确认清空' : '🗑️ 清空错题本') + '</button>';
+  if (state._clearConfirming) {
+    html += '<button class="back-btn" onclick="state._clearConfirming=false;renderWrongBook()">取消</button>';
+  }
+  html += '<button class="back-btn" onclick="closeWrongBook()">← 返回题库</button>';
+  html += '</div></div>';
+
+  if (wrongQuestions.length === 0) {
+    html += '<div class="wrong-book-empty"><div class="icon">🎉</div><p>错题本是空的，继续保持！</p></div>';
+    list.innerHTML = html;
+    document.getElementById('pagination').innerHTML = '';
+    return;
+  }
+
+  // 分页
+  const start = (state.page - 1) * state.pageSize;
+  const end = start + state.pageSize;
+  const pageItems = wrongQuestions.slice(start, end);
+
+  pageItems.forEach((q, i) => {
+    const idx = start + i;
+    const globalIdx = DATA.indexOf(q);
+    const qid = 'q_' + globalIdx;
+    const result = state.results[qid];
+
+    html += `<div class="question-card" id="card_${qid}">`;
+    html += `<div class="q-header"><span class="q-number">第 ${idx + 1} 题 / 共 ${wrongQuestions.length} 题</span><div class="q-tags"><span class="tag tag-category">${q.category}</span><span class="tag tag-type ${q.type}">${q.type}</span></div></div>`;
+    html += `<div class="q-text">${escapeHtml(q.question)}</div>`;
+
+    if (q.type === '简答题') {
+      html += renderShortAnswer(q, qid);
+    } else {
+      html += renderChoiceQuestion(q, qid, result);
+    }
+
+    // 添加移除按钮
+    html += `<button class="show-answer-btn" style="margin-top:12px;color:#c5221f" onclick="removeFromWrongBook(${globalIdx})">✕ 从错题本移除</button>`;
+    html += `</div>`;
+  });
+
+  list.innerHTML = html;
+
+  // 分页
+  const total = Math.ceil(wrongQuestions.length / state.pageSize);
+  if (total > 1) {
+    let pgHtml = `<button ${state.page <= 1 ? 'disabled' : ''} onclick="wrongBookPage(${state.page - 1})">上一页</button>`;
+    pgHtml += `<span class="page-info">${state.page} / ${total}</span>`;
+    pgHtml += `<button ${state.page >= total ? 'disabled' : ''} onclick="wrongBookPage(${state.page + 1})">下一页</button>`;
+    document.getElementById('pagination').innerHTML = pgHtml;
+  } else {
+    document.getElementById('pagination').innerHTML = '';
+  }
+}
+
+function wrongBookPage(p) {
+  const wrongQuestions = state.wrongBook.map(idx => DATA[idx]).filter(Boolean);
+  const total = Math.ceil(wrongQuestions.length / state.pageSize);
+  state.page = Math.max(1, Math.min(total, p));
+  state.answers = {};
+  state.results = {};
+  renderWrongBook();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function removeFromWrongBook(globalIdx) {
+  state.wrongBook = state.wrongBook.filter(i => i !== globalIdx);
+  saveWrongBook();
+  updateWrongBadge();
+  state.results = {};
+  state.answers = {};
+  renderWrongBook();
+}
+
+function clearWrongBook() {
+  if (state._clearConfirming) {
+    state.wrongBook = [];
+    saveWrongBook();
+    updateWrongBadge();
+    state._clearConfirming = false;
+    renderWrongBook();
+  } else {
+    state._clearConfirming = true;
+    renderWrongBook();
+  }
+}
+
+// 重写 render 函数，根据 currentView 决定渲染内容
+const _originalRender = render;
+render = function() {
+  if (state.currentView === 'wrongBook') {
+    renderWrongBook();
+  } else {
+    _originalRender();
+  }
+};
 
 init();
 </script>
